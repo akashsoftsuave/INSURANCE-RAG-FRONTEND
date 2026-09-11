@@ -1,26 +1,55 @@
 import { useState } from 'react'
 import { askQuestion } from './api/client'
+import type { ChatResponse, RagMode } from './api/types'
 import { ChatPanel } from './components/ChatPanel'
 import { DocumentPanel } from './components/DocumentPanel'
 import type { ChatMessage, DocumentStatus } from './types'
+
+function toAssistantMessage(response: ChatResponse): ChatMessage {
+  const sourcePages = [...new Set(response.sources.map((s) => s.page))].sort((a, b) => a - b)
+  return {
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    text: response.answer,
+    sourcePages,
+    meta: {
+      mode: response.mode,
+      requestedMode: response.requested_mode,
+      rounds: response.rounds,
+      queries: response.queries,
+      latencyMs: response.latency_ms,
+      tokens: response.tokens,
+      costUsd: response.cost_usd,
+      routing: response.routing,
+      traceId: response.trace_id,
+    },
+  }
+}
 
 function App() {
   const [documentStatus, setDocumentStatus] = useState<DocumentStatus | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isSending, setIsSending] = useState(false)
+  const [mode, setMode] = useState<RagMode>('fixed')
+  const [compareBoth, setCompareBoth] = useState(false)
 
   async function handleSend(question: string) {
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', text: question }
-    setMessages((prev) => [...prev, userMessage])
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: 'user', text: question, requestedMode: mode },
+    ])
     setIsSending(true)
 
+    // "Compare both" is purely a client convenience — it sends the same
+    // question twice, once per flow. Which flow answers is still entirely the
+    // backend's call; the client never routes.
+    const modesToRun: RagMode[] = compareBoth ? ['fixed', 'agentic'] : [mode]
+
     try {
-      const response = await askQuestion(question)
-      const sourcePages = [...new Set(response.sources.map((s) => s.page))].sort((a, b) => a - b)
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: 'assistant', text: response.answer, sourcePages },
-      ])
+      for (const runMode of modesToRun) {
+        const response = await askQuestion(question, runMode)
+        setMessages((prev) => [...prev, toAssistantMessage(response)])
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -51,6 +80,10 @@ function App() {
             messages={messages}
             disabled={!documentStatus}
             isSending={isSending}
+            mode={mode}
+            onModeChange={setMode}
+            compareBoth={compareBoth}
+            onCompareBothChange={setCompareBoth}
             onSend={handleSend}
           />
         </main>
